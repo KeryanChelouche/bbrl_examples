@@ -57,6 +57,32 @@ matplotlib.use("TkAgg")
 def make_gym_env(env_name):
     return gym.make(env_name)
 
+class LSTMQAgent(Agent):
+    def __init__(self, state_dim, hidden_dim, nb_layers, action_dim):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.lstm = nn.LSTM(state_dim, hidden_dim, nb_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, action_dim)
+        self.nb_layers = nb_layers
+
+    def forward(self, t, choose_action=True, **kwargs):
+        obs = self.get(("env/env_obs", t))
+        # print(obs)
+        batch_size = obs.shape[0]
+        # L'état caché initial h0 est utilisé pour initialiser la sortie de l'unité LSTM pour la première séquence d'entrée, 
+        # et la sortie de la première séquence devient l'état caché pour la deuxième séquence d'entrée, et ainsi de suite.
+        # La mémoire cellulaire c0 est également utilisée pour stocker des informations importantes sur les séquences précédentes et est passée d'une séquence à l'autre.
+        h0 = torch.zeros(self.nb_layers, batch_size, self.hidden_dim).to(obs.device)
+        c0 = torch.zeros(self.nb_layers, batch_size, self.hidden_dim).to(obs.device)
+        # print(obs.shape, h0.shape,c0.shape)
+
+        lstm_out, _ = self.lstm(obs.unsqueeze(0), (h0, c0))  
+        # lstm_out : batch_size x sequence_length x state_dim
+        q_values = self.fc(lstm_out[:, -1, :])
+        self.set(("q_values", t), q_values)
+        if choose_action:
+            action = q_values.argmax(1)
+            self.set(("action", t), action)
 
 # Create the PPO Agent
 def create_ppo_agent(cfg, train_env_agent, eval_env_agent):
@@ -68,7 +94,7 @@ def create_ppo_agent(cfg, train_env_agent, eval_env_agent):
     ev_agent = Agents(eval_env_agent, policy)
 
     critic_agent = TemporalAgent(
-        VAgent(obs_size, cfg.algorithm.architecture.critic_hidden_size)
+        LSTMQAgent(obs_size, cfg.algorithm.architecture.critic_hidden_size)
     )
     old_critic_agent = copy.deepcopy(critic_agent)
 
